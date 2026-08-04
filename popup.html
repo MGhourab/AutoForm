@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+body{font-family:Arial;width:320px;padding:10px}
+input,button{width:100%;margin:4px 0;box-sizing:border-box}
+.row{display:flex;justify-content:space-between;font-size:12px}
+</style></head><body>
+<h3>AutoForm Fill</h3>
+<label>Fixed Value</label><input id=fixed>
+<label>Start</label><input id=start type=number value=1>
+<label>End</label><input id=end type=number value=100>
+<label>Step</label><input id=step type=number value=1>
+<hr>
+<div class=row><span>Fixed</span><span id=sf>❌</span></div>
+<button id=pf>Select Fixed Field</button>
+<div class=row><span>Number</span><span id=sn>❌</span></div>
+<button id=pn>Select Number Field</button>
+<div class=row><span>Submit</span><span id=ss>❌</span></div>
+<button id=ps>Select Submit Button</button>
+<hr>
+<button id=startBtn>Start</button>
+<button id=stopBtn>Stop</button>
+<script src="popup.js"></script></body></html>
