@@ -1,8 +1,36 @@
+chrome.runtime.onMessage.addListener((msg, sender) => {
+    if (!msg || !msg.cmd) {
+        return;
+    }
 
-chrome.runtime.onMessage.addListener((msg,sender)=>{
-  if(msg.cmd==="picker"){
-    chrome.tabs.query({active:true,currentWindow:true},tabs=>{
-      if(tabs[0]) chrome.tabs.sendMessage(tabs[0].id,msg);
-    });
-  }
+    switch (msg.cmd) {
+
+        case "picker":
+        case "startAutomation":
+        case "stopAutomation":
+
+            chrome.tabs.query(
+                {
+                    active: true,
+                    currentWindow: true
+                },
+                tabs => {
+
+                    if (!tabs.length) {
+                        return;
+                    }
+
+                    chrome.tabs.sendMessage(
+                        tabs[0].id,
+                        msg
+                    );
+
+                }
+            );
+
+            break;
+
+        default:
+            break;
+    }
 });

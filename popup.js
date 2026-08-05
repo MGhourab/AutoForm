@@ -65,6 +65,24 @@
         window.close();
     }
 
+    function startAutomation() {
+        saveSettings();
+
+        chrome.runtime.sendMessage({
+            cmd: "startAutomation"
+        });
+
+        window.close();
+    }
+
+    function stopAutomation() {
+        chrome.runtime.sendMessage({
+            cmd: "stopAutomation"
+        });
+
+        window.close();
+    }
+
     function resetConfiguration() {
         const confirmed = confirm(
             "Reset all AutoForm configuration?"
@@ -98,13 +116,8 @@
     $("pn").addEventListener("click", () => sendPicker("number"));
     $("ps").addEventListener("click", () => sendPicker("submit"));
 
-    $("startBtn").addEventListener("click", () => {
-        alert("Automation next version");
-    });
-
-    $("stopBtn").addEventListener("click", () => {
-        alert("Stopped");
-    });
+    $("startBtn").addEventListener("click", startAutomation);
+    $("stopBtn").addEventListener("click", stopAutomation);
 
     $("resetBtn").addEventListener("click", resetConfiguration);
 
