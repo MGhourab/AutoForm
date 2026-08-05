@@ -34,7 +34,6 @@
         const path = [];
 
         while (el && el !== document.body) {
-
             let index = 1;
             let sibling = el;
 
@@ -62,7 +61,6 @@
     }
 
     function stopPicker() {
-
         if (!state.active) {
             return;
         }
@@ -80,16 +78,17 @@
     }
 
     function move(e) {
+        if (state.hover === e.target) {
+            return;
+        }
 
         clearHighlight();
 
         state.hover = e.target;
-
-        state.hover.style.outline = "3px solid #2196f3";
+        state.hover.style.outline = "2px solid #1976d2";
     }
 
     function esc(e) {
-
         if (e.key !== "Escape") {
             return;
         }
@@ -100,7 +99,6 @@
     }
 
     function buildSelector(el) {
-
         return {
             css: cssSelector(el),
             id: el.id || "",
@@ -112,24 +110,19 @@
     }
 
     function saveSelector(selector, mode) {
+        chrome.storage.local.get("selectors", result => {
+            const selectors = result.selectors || {};
 
-    chrome.storage.local.get("selectors", result => {
+            selectors[mode] = selector;
 
-        const selectors = result.selectors || {};
-
-        selectors[mode] = selector;
-
-        chrome.storage.local.set(
-            { selectors },
-            () => toast(`Saved ${mode} field`)
-        );
-
-    });
-
-}
+            chrome.storage.local.set(
+                { selectors },
+                () => toast(`Saved ${mode} field`)
+            );
+        });
+    }
 
     function pick(e) {
-
         if (!state.active) {
             return;
         }
@@ -138,16 +131,14 @@
         e.stopPropagation();
 
         const selector = buildSelector(e.target);
-
         const currentMode = state.mode;
 
-	saveSelector(selector, currentMode);
+        saveSelector(selector, currentMode);
 
-	stopPicker();
+        stopPicker();
     }
 
     function startPicker(mode) {
-
         stopPicker();
 
         state.mode = mode;
@@ -161,13 +152,10 @@
     }
 
     chrome.runtime.onMessage.addListener(message => {
-
         if (message.cmd !== "picker") {
             return;
         }
 
         startPicker(message.type);
-
     });
-
 })();
