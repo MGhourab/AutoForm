@@ -7,7 +7,8 @@
         fixed: "",
         start: 1,
         end: 100,
-        step: 1
+        step: 1,
+        postSubmitDelay: 5000
     };
 
     function saveSettings() {
@@ -15,7 +16,8 @@
             fixed: $("fixed").value,
             start: Number($("start").value),
             end: Number($("end").value),
-            step: Number($("step").value)
+            step: Number($("step").value),
+            postSubmitDelay: Number($("postSubmitDelay").value)
         });
     }
 
@@ -25,13 +27,15 @@
                 fixed: DEFAULTS.fixed,
                 start: DEFAULTS.start,
                 end: DEFAULTS.end,
-                step: DEFAULTS.step
+                step: DEFAULTS.step,
+                postSubmitDelay: DEFAULTS.postSubmitDelay
             },
             data => {
                 $("fixed").value = data.fixed;
                 $("start").value = data.start;
                 $("end").value = data.end;
                 $("step").value = data.step;
+                $("postSubmitDelay").value = data.postSubmitDelay;
             }
         );
     }
@@ -98,7 +102,8 @@
                 fixed: DEFAULTS.fixed,
                 start: DEFAULTS.start,
                 end: DEFAULTS.end,
-                step: DEFAULTS.step
+                step: DEFAULTS.step,
+                postSubmitDelay: DEFAULTS.postSubmitDelay
             },
             () => {
                 loadSettings();
@@ -108,7 +113,7 @@
         );
     }
 
-    ["fixed", "start", "end", "step"].forEach(id => {
+    ["fixed", "start", "end", "step", "postSubmitDelay"].forEach(id => {
         $(id).addEventListener("change", saveSettings);
     });
 

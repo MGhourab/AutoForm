@@ -152,10 +152,22 @@
     }
 
     chrome.runtime.onMessage.addListener(message => {
-        if (message.cmd !== "picker") {
-            return;
+
+        switch (message.cmd) {
+
+            case "picker":
+                startPicker(message.type);
+                break;
+
+            case "automationStep":
+                window.AutomationEngine.runStep(message);
+                break;
+
+            case "automationToast":
+                toast(message.text);
+                break;
+
         }
 
-        startPicker(message.type);
     });
 })();
