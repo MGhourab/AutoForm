@@ -21,6 +21,10 @@
         });
     }
 
+    function getTab(tabId) {
+        return new Promise(resolve => chrome.tabs.get(tabId, resolve));
+    }
+
     function notifyTab(tabId, message) {
         return new Promise(resolve => {
             chrome.tabs.sendMessage(tabId, message, () => {
@@ -45,10 +49,28 @@
         });
     }
 
+    async function runCycle(state) {
+        state.status = "running";
+        state.runId = crypto.randomUUID();
+        await setSession(state);
+
+        const sent = await notifyTab(state.tabId, {
+            cmd: "automationRun",
+            runId: state.runId,
+            fixed: state.fixed,
+            number: state.number,
+            selectors: state.selectors
+        });
+
+        if (!sent) {
+            await failAutomation(state, "Could not reach page content script");
+        }
+    }
+
     async function startAutomation(tabId) {
         const existing = await getSession();
 
-        if (existing.active && existing.status === "running") {
+        if (existing.active) {
             await notifyTab(tabId, {
                 cmd: "automationToast",
                 text: "Automation already running"
@@ -64,10 +86,14 @@
         const settings = await getStorage({
             fixed: "",
             start: 1,
+            end: 100,
+            step: 1,
             selectors: {}
         });
         const selectors = settings.selectors || {};
-        const number = Number(settings.start);
+        const start = Number(settings.start);
+        const end = Number(settings.end);
+        const step = Number(settings.step);
 
         if (settings.fixed === "" || settings.fixed == null) {
             await notifyTab(tabId, {
@@ -77,10 +103,16 @@
             return;
         }
 
-        if (!Number.isFinite(number)) {
+        if (
+            !Number.isFinite(start) ||
+            !Number.isFinite(end) ||
+            !Number.isFinite(step) ||
+            step <= 0 ||
+            start > end
+        ) {
             await notifyTab(tabId, {
                 cmd: "automationToast",
-                text: "Automation failed: Number value not configured"
+                text: "Automation failed: Invalid Start, End, or Step"
             });
             return;
         }
@@ -93,31 +125,24 @@
             return;
         }
 
+        const tab = await getTab(tabId);
         const state = {
             active: true,
             status: "running",
             tabId,
-            runId: crypto.randomUUID(),
+            originUrl: tab.url,
             fixed: String(settings.fixed),
-            number
+            number: start,
+            end,
+            step,
+            selectors,
+            runId: null
         };
 
-        await setSession(state);
-
-        const sent = await notifyTab(tabId, {
-            cmd: "automationRun",
-            runId: state.runId,
-            fixed: state.fixed,
-            number: state.number,
-            selectors
-        });
-
-        if (!sent) {
-            await failAutomation(state, "Could not reach page content script");
-        }
+        await runCycle(state);
     }
 
-    async function stopAutomation(tabId) {
+    async function stopAutomation(tabId, message = "Automation stopped") {
         const state = await getSession();
         const targetTabId = tabId || state.tabId;
 
@@ -133,7 +158,7 @@
         if (targetTabId) {
             await notifyTab(targetTabId, {
                 cmd: "automationToast",
-                text: "Automation stopped"
+                text: message
             });
         }
     }
@@ -174,10 +199,23 @@
                         state.runId === message.runId &&
                         state.tabId === sender.tab?.id
                     ) {
-                        await setStatus(state, "completed");
+                        const nextNumber = state.number + state.step;
+
+                        if (nextNumber > state.end) {
+                            await setStatus(state, "completed");
+                            await notifyTab(state.tabId, {
+                                cmd: "automationToast",
+                                text: "Automation completed"
+                            });
+                            return;
+                        }
+
+                        state.number = nextNumber;
+                        state.status = "waitingForReload";
+                        await setSession(state);
                         await notifyTab(state.tabId, {
                             cmd: "automationToast",
-                            text: "Automation completed"
+                            text: `Waiting for page reload before number ${state.number}`
                         });
                     }
                 });
@@ -199,5 +237,31 @@
             default:
                 break;
         }
+    });
+
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (changeInfo.status !== "complete") {
+            return;
+        }
+
+        getSession().then(async state => {
+            if (
+                !state.active ||
+                state.status !== "waitingForReload" ||
+                state.tabId !== tabId
+            ) {
+                return;
+            }
+
+            if (tab.url !== state.originUrl) {
+                await stopAutomation(
+                    tabId,
+                    `Automation stopped at number ${state.number}: page changed`
+                );
+                return;
+            }
+
+            await runCycle(state);
+        });
     });
 })();
