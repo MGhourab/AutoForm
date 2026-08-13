@@ -2,43 +2,23 @@
     "use strict";
 
     const SESSION_KEY = "automationState";
-    const DEFAULT_POST_SUBMIT_DELAY = 5000;
-
-    let advanceTimer = null;
-
-    function clearAdvanceTimer() {
-        if (advanceTimer) {
-            clearTimeout(advanceTimer);
-            advanceTimer = null;
-        }
-    }
 
     function getStorage(defaults) {
-        return new Promise(resolve => {
-            chrome.storage.local.get(defaults, resolve);
-        });
+        return new Promise(resolve => chrome.storage.local.get(defaults, resolve));
     }
 
     function getSession() {
         return new Promise(resolve => {
             chrome.storage.session.get(SESSION_KEY, result => {
-                resolve(result[SESSION_KEY] || null);
+                resolve(result[SESSION_KEY] || { status: "idle" });
             });
         });
     }
 
     function setSession(state) {
         return new Promise(resolve => {
-            if (state) {
-                chrome.storage.session.set({ [SESSION_KEY]: state }, resolve);
-            } else {
-                chrome.storage.session.remove(SESSION_KEY, resolve);
-            }
+            chrome.storage.session.set({ [SESSION_KEY]: state }, resolve);
         });
-    }
-
-    function countIterations(start, end, step) {
-        return Math.floor((end - start) / step) + 1;
     }
 
     function notifyTab(tabId, message) {
@@ -49,103 +29,26 @@
         });
     }
 
-    async function completeAutomation(state, message) {
-        clearAdvanceTimer();
-        await notifyTab(state.tabId, {
-            cmd: "automationToast",
-            text: message
+    async function setStatus(state, status) {
+        await setSession({
+            ...state,
+            active: false,
+            status
         });
-        await setSession(null);
     }
 
     async function failAutomation(state, message) {
-        clearAdvanceTimer();
+        await setStatus(state, "failed");
         await notifyTab(state.tabId, {
             cmd: "automationToast",
             text: `Automation failed: ${message}`
         });
-        await setSession(null);
-    }
-
-    async function runStep(state) {
-        state.phase = "running";
-        state.advanceScheduled = false;
-        await setSession(state);
-
-        const sent = await notifyTab(state.tabId, {
-            cmd: "automationStep",
-            fixed: state.fixed,
-            number: state.currentNumber,
-            index: state.index,
-            total: state.total
-        });
-
-        if (!sent) {
-            state.retryCount = (state.retryCount || 0) + 1;
-
-            if (state.retryCount > 10) {
-                await failAutomation(state, "Could not reach page content script");
-                return;
-            }
-
-            setTimeout(() => {
-                getSession().then(current => {
-                    if (current && current.active) {
-                        runStep(current);
-                    }
-                });
-            }, 500);
-
-            return;
-        }
-
-        state.retryCount = 0;
-        state.phase = "waiting";
-        await setSession(state);
-    }
-
-    function scheduleAdvance(state) {
-        if (!state || !state.active || state.advanceScheduled) {
-            return;
-        }
-
-        state.advanceScheduled = true;
-        state.phase = "delaying";
-        setSession(state);
-
-        clearAdvanceTimer();
-
-        advanceTimer = setTimeout(async () => {
-            advanceTimer = null;
-
-            const current = await getSession();
-
-            if (!current || !current.active) {
-                return;
-            }
-
-            current.currentNumber += current.step;
-            current.index += 1;
-            current.advanceScheduled = false;
-
-            if (current.currentNumber > current.end) {
-                await completeAutomation(
-                    current,
-                    `Automation completed (${current.total} submission${current.total === 1 ? "" : "s"})`
-                );
-                return;
-            }
-
-            await runStep(current);
-        }, current.postSubmitDelay);
     }
 
     async function startAutomation(tabId) {
-        clearAdvanceTimer();
-
         const existing = await getSession();
 
-        if (existing && existing.active) {
+        if (existing.active && existing.status === "running") {
             await notifyTab(tabId, {
                 cmd: "automationToast",
                 text: "Automation already running"
@@ -153,19 +56,18 @@
             return;
         }
 
+        await notifyTab(tabId, {
+            cmd: "automationToast",
+            text: "Starting automation..."
+        });
+
         const settings = await getStorage({
             fixed: "",
             start: 1,
-            end: 100,
-            step: 1,
-            postSubmitDelay: DEFAULT_POST_SUBMIT_DELAY,
             selectors: {}
         });
-
-        const start = Number(settings.start);
-        const end = Number(settings.end);
-        const step = Number(settings.step);
         const selectors = settings.selectors || {};
+        const number = Number(settings.start);
 
         if (settings.fixed === "" || settings.fixed == null) {
             await notifyTab(tabId, {
@@ -175,18 +77,10 @@
             return;
         }
 
-        if (Number.isNaN(start) || Number.isNaN(end) || Number.isNaN(step) || step <= 0) {
+        if (!Number.isFinite(number)) {
             await notifyTab(tabId, {
                 cmd: "automationToast",
-                text: "Automation failed: Invalid Start, End, or Step"
-            });
-            return;
-        }
-
-        if (start > end) {
-            await notifyTab(tabId, {
-                cmd: "automationToast",
-                text: "Automation failed: Start must be <= End"
+                text: "Automation failed: Number value not configured"
             });
             return;
         }
@@ -199,103 +93,105 @@
             return;
         }
 
-        const total = countIterations(start, end, step);
-
         const state = {
             active: true,
+            status: "running",
             tabId,
+            runId: crypto.randomUUID(),
             fixed: String(settings.fixed),
-            start,
-            end,
-            step,
-            currentNumber: start,
-            index: 1,
-            total,
-            postSubmitDelay: Math.max(
-                0,
-                Number(settings.postSubmitDelay ?? DEFAULT_POST_SUBMIT_DELAY)
-            ),
-            phase: "starting",
-            advanceScheduled: false,
-            retryCount: 0
+            number
         };
 
         await setSession(state);
 
-        await notifyTab(tabId, {
-            cmd: "automationToast",
-            text: "Starting automation..."
+        const sent = await notifyTab(tabId, {
+            cmd: "automationRun",
+            runId: state.runId,
+            fixed: state.fixed,
+            number: state.number,
+            selectors
         });
 
-        await runStep(state);
+        if (!sent) {
+            await failAutomation(state, "Could not reach page content script");
+        }
     }
 
     async function stopAutomation(tabId) {
         const state = await getSession();
+        const targetTabId = tabId || state.tabId;
 
-        clearAdvanceTimer();
-        await setSession(null);
-
-        if (tabId) {
-            await notifyTab(tabId, {
-                cmd: "automationToast",
-                text: "Automation stopped"
-            });
-        } else if (state && state.tabId) {
+        if (state.active && state.tabId) {
             await notifyTab(state.tabId, {
+                cmd: "automationStop",
+                runId: state.runId
+            });
+        }
+
+        await setStatus(state, "stopped");
+
+        if (targetTabId) {
+            await notifyTab(targetTabId, {
                 cmd: "automationToast",
                 text: "Automation stopped"
             });
         }
     }
 
-    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-        if (!msg || !msg.cmd) {
+    chrome.runtime.onMessage.addListener((message, sender) => {
+        if (!message || !message.cmd) {
             return;
         }
 
-        switch (msg.cmd) {
-
+        switch (message.cmd) {
             case "picker":
-                chrome.tabs.query(
-                    { active: true, currentWindow: true },
-                    tabs => {
-                        if (tabs.length) {
-                            chrome.tabs.sendMessage(tabs[0].id, msg);
-                        }
+                chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+                    if (tabs.length) {
+                        chrome.tabs.sendMessage(tabs[0].id, message);
                     }
-                );
+                });
                 break;
 
             case "startAutomation":
-                chrome.tabs.query(
-                    { active: true, currentWindow: true },
-                    tabs => {
-                        if (tabs.length) {
-                            startAutomation(tabs[0].id);
-                        }
+                chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+                    if (tabs.length) {
+                        startAutomation(tabs[0].id);
                     }
-                );
+                });
                 break;
 
             case "stopAutomation":
-                chrome.tabs.query(
-                    { active: true, currentWindow: true },
-                    tabs => {
-                        stopAutomation(tabs.length ? tabs[0].id : null);
-                    }
-                );
+                chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+                    stopAutomation(tabs.length ? tabs[0].id : null);
+                });
                 break;
 
-            case "automationStepDone":
-                getSession().then(state => {
+            case "automationCycleCompleted":
+                getSession().then(async state => {
                     if (
-                        state &&
                         state.active &&
-                        state.phase === "waiting" &&
+                        state.status === "running" &&
+                        state.runId === message.runId &&
                         state.tabId === sender.tab?.id
                     ) {
-                        scheduleAdvance(state);
+                        await setStatus(state, "completed");
+                        await notifyTab(state.tabId, {
+                            cmd: "automationToast",
+                            text: "Automation completed"
+                        });
+                    }
+                });
+                break;
+
+            case "automationCycleFailed":
+                getSession().then(async state => {
+                    if (
+                        state.active &&
+                        state.status === "running" &&
+                        state.runId === message.runId &&
+                        state.tabId === sender.tab?.id
+                    ) {
+                        await failAutomation(state, message.error || "Unknown error");
                     }
                 });
                 break;
@@ -304,22 +200,4 @@
                 break;
         }
     });
-
-    chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-        if (changeInfo.status !== "complete") {
-            return;
-        }
-
-        getSession().then(state => {
-            if (
-                state &&
-                state.active &&
-                state.tabId === tabId &&
-                state.phase === "waiting"
-            ) {
-                scheduleAdvance(state);
-            }
-        });
-    });
-
 })();
