@@ -26,12 +26,13 @@
         return new Promise(resolve => chrome.tabs.get(tabId, resolve));
     }
 
-    function notifyTab(tabId, message) {
-        return new Promise(resolve => {
-            chrome.tabs.sendMessage(tabId, message, () => {
-                resolve(!chrome.runtime.lastError);
-            });
-        });
+    async function notifyTab(tabId, message) {
+        try {
+            await chrome.tabs.sendMessage(tabId, message);
+            return true;
+        } catch (error) {
+            return false;
+        }
     }
 
     async function setStatus(state, status) {
@@ -273,6 +274,12 @@
 
             default:
                 break;
+        }
+    });
+
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (changeInfo.status === "complete") {
+            setTimeout(() => continueAfterReload(tabId, tab.url), 500);
         }
     });
 
