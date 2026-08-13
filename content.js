@@ -1,6 +1,12 @@
 (() => {
     "use strict";
 
+    if (window.__autoFormContentLoaded) {
+        return;
+    }
+
+    window.__autoFormContentLoaded = true;
+
     const state = {
         mode: null,
         hover: null,
@@ -155,6 +161,9 @@
         switch (message.cmd) {
             case "picker":
                 startPicker(message.type);
+                break;
+
+            case "automationPing":
                 break;
 
             case "automationRun":

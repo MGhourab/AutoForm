@@ -50,7 +50,33 @@
         });
     }
 
+    async function ensureContentScript(tabId) {
+        const available = await notifyTab(tabId, { cmd: "automationPing" });
+
+        if (available) {
+            return true;
+        }
+
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId },
+                files: ["automation/AutomationEngine.js", "content.js"]
+            });
+
+            return await notifyTab(tabId, { cmd: "automationPing" });
+        } catch (error) {
+            return false;
+        }
+    }
+
     async function runCycle(state) {
+        const ready = await ensureContentScript(state.tabId);
+
+        if (!ready) {
+            await failAutomation(state, "Could not reach page content script");
+            return;
+        }
+
         state.status = "submitting";
         state.runId = crypto.randomUUID();
         await setSession(state);
@@ -67,7 +93,6 @@
             await failAutomation(state, "Could not reach page content script");
         }
     }
-
     async function startAutomation(tabId) {
         const existing = await getSession();
 
