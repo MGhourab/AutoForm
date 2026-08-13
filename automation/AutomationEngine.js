@@ -109,16 +109,20 @@
             ensureActive(payload.runId);
 
             toast("Submitting form...");
+            await new Promise(resolve => {
+                chrome.runtime.sendMessage(
+                    {
+                        cmd: "automationSubmissionStarted",
+                        runId: payload.runId
+                    },
+                    resolve
+                );
+            });
+            ensureActive(payload.runId);
+
             submitElement.focus();
             submitElement.click();
-
-            if (activeRunId === payload.runId) {
-                activeRunId = null;
-                chrome.runtime.sendMessage({
-                    cmd: "automationCycleCompleted",
-                    runId: payload.runId
-                });
-            }
+            activeRunId = null;
         } catch (error) {
             if (activeRunId !== payload.runId) {
                 return;

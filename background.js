@@ -185,7 +185,7 @@
         }
     }
 
-    chrome.runtime.onMessage.addListener((message, sender) => {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!message || !message.cmd) {
             return;
         }
@@ -213,7 +213,7 @@
                 });
                 break;
 
-            case "automationCycleCompleted":
+            case "automationSubmissionStarted":
                 getSession().then(async state => {
                     if (
                         state.active &&
@@ -223,8 +223,10 @@
                     ) {
                         await advanceAfterSubmission(state);
                     }
+
+                    sendResponse();
                 });
-                break;
+                return true;
 
             case "automationCycleFailed":
                 getSession().then(async state => {
