@@ -50,7 +50,7 @@
     }
 
     async function runCycle(state) {
-        state.status = "running";
+        state.status = "submitting";
         state.runId = crypto.randomUUID();
         await setSession(state);
 
@@ -142,6 +142,28 @@
         await runCycle(state);
     }
 
+    async function advanceAfterSubmission(state) {
+        const nextNumber = state.number + state.step;
+
+        if (nextNumber > state.end) {
+            await setStatus(state, "completed");
+            await notifyTab(state.tabId, {
+                cmd: "automationToast",
+                text: "Automation completed"
+            });
+            return false;
+        }
+
+        state.number = nextNumber;
+        state.status = "waitingForReload";
+        await setSession(state);
+        await notifyTab(state.tabId, {
+            cmd: "automationToast",
+            text: `Waiting for page reload before number ${state.number}`
+        });
+        return true;
+    }
+
     async function stopAutomation(tabId, message = "Automation stopped") {
         const state = await getSession();
         const targetTabId = tabId || state.tabId;
@@ -195,28 +217,11 @@
                 getSession().then(async state => {
                     if (
                         state.active &&
-                        state.status === "running" &&
+                        state.status === "submitting" &&
                         state.runId === message.runId &&
                         state.tabId === sender.tab?.id
                     ) {
-                        const nextNumber = state.number + state.step;
-
-                        if (nextNumber > state.end) {
-                            await setStatus(state, "completed");
-                            await notifyTab(state.tabId, {
-                                cmd: "automationToast",
-                                text: "Automation completed"
-                            });
-                            return;
-                        }
-
-                        state.number = nextNumber;
-                        state.status = "waitingForReload";
-                        await setSession(state);
-                        await notifyTab(state.tabId, {
-                            cmd: "automationToast",
-                            text: `Waiting for page reload before number ${state.number}`
-                        });
+                        await advanceAfterSubmission(state);
                     }
                 });
                 break;
@@ -225,7 +230,7 @@
                 getSession().then(async state => {
                     if (
                         state.active &&
-                        state.status === "running" &&
+                        state.status === "submitting" &&
                         state.runId === message.runId &&
                         state.tabId === sender.tab?.id
                     ) {
@@ -247,7 +252,7 @@
         getSession().then(async state => {
             if (
                 !state.active ||
-                state.status !== "waitingForReload" ||
+                !["submitting", "waitingForReload"].includes(state.status) ||
                 state.tabId !== tabId
             ) {
                 return;
@@ -259,6 +264,14 @@
                     `Automation stopped at number ${state.number}: page changed`
                 );
                 return;
+            }
+
+            if (state.status === "submitting") {
+                const hasNextCycle = await advanceAfterSubmission(state);
+
+                if (!hasNextCycle) {
+                    return;
+                }
             }
 
             await runCycle(state);
