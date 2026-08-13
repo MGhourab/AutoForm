@@ -263,7 +263,7 @@
 
         if (
             !state.active ||
-            !["submitting", "waitingForReload"].includes(state.status) ||
+            state.status !== "waitingForReload" ||
             state.tabId !== tabId
         ) {
             return;
@@ -275,14 +275,6 @@
                 `Automation stopped at number ${state.number}: page changed`
             );
             return;
-        }
-
-        if (state.status === "submitting") {
-            const hasNextCycle = await advanceAfterSubmission(state);
-
-            if (!hasNextCycle) {
-                return;
-            }
         }
 
             await runCycle(state);

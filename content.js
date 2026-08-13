@@ -174,5 +174,10 @@
         }
     });
 
-    chrome.runtime.sendMessage({ cmd: "automationPageReady" });
+    function reportPageReady() {
+        chrome.runtime.sendMessage({ cmd: "automationPageReady" });
+    }
+
+    window.addEventListener("pageshow", reportPageReady);
+    setTimeout(reportPageReady, 300);
 })();
