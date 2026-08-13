@@ -173,4 +173,6 @@
                 break;
         }
     });
+
+    chrome.runtime.sendMessage({ cmd: "automationPageReady" });
 })();

@@ -2,6 +2,7 @@
     "use strict";
 
     const SESSION_KEY = "automationState";
+    const continuingTabIds = new Set();
 
     function getStorage(defaults) {
         return new Promise(resolve => chrome.storage.local.get(defaults, resolve));
@@ -228,6 +229,10 @@
                 });
                 return true;
 
+            case "automationPageReady":
+                continueAfterReload(sender.tab?.id, sender.tab?.url);
+                break;
+
             case "automationCycleFailed":
                 getSession().then(async state => {
                     if (
@@ -246,37 +251,49 @@
         }
     });
 
-    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-        if (changeInfo.status !== "complete") {
+    async function continueAfterReload(tabId, url) {
+        if (!tabId || continuingTabIds.has(tabId)) {
             return;
         }
 
-        getSession().then(async state => {
-            if (
-                !state.active ||
-                !["submitting", "waitingForReload"].includes(state.status) ||
-                state.tabId !== tabId
-            ) {
+        continuingTabIds.add(tabId);
+
+        try {
+            const state = await getSession();
+
+        if (
+            !state.active ||
+            !["submitting", "waitingForReload"].includes(state.status) ||
+            state.tabId !== tabId
+        ) {
+            return;
+        }
+
+        if (url !== state.originUrl) {
+            await stopAutomation(
+                tabId,
+                `Automation stopped at number ${state.number}: page changed`
+            );
+            return;
+        }
+
+        if (state.status === "submitting") {
+            const hasNextCycle = await advanceAfterSubmission(state);
+
+            if (!hasNextCycle) {
                 return;
             }
-
-            if (tab.url !== state.originUrl) {
-                await stopAutomation(
-                    tabId,
-                    `Automation stopped at number ${state.number}: page changed`
-                );
-                return;
-            }
-
-            if (state.status === "submitting") {
-                const hasNextCycle = await advanceAfterSubmission(state);
-
-                if (!hasNextCycle) {
-                    return;
-                }
-            }
+        }
 
             await runCycle(state);
-        });
+        } finally {
+            continuingTabIds.delete(tabId);
+        }
+    }
+
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (changeInfo.status === "complete") {
+            continueAfterReload(tabId, tab.url);
+        }
     });
 })();
