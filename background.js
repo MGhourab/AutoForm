@@ -2,7 +2,6 @@
     "use strict";
 
     const SESSION_KEY = "automationState";
-    const continuingTabIds = new Set();
 
     function getStorage(defaults) {
         return new Promise(resolve => chrome.storage.local.get(defaults, resolve));
@@ -11,7 +10,7 @@
     function getSession() {
         return new Promise(resolve => {
             chrome.storage.session.get(SESSION_KEY, result => {
-                resolve(result[SESSION_KEY] || { status: "idle" });
+                resolve(result[SESSION_KEY] || { status: "idle", active: false });
             });
         });
     }
@@ -23,14 +22,23 @@
     }
 
     function getTab(tabId) {
-        return new Promise(resolve => chrome.tabs.get(tabId, resolve));
+        return new Promise((resolve, reject) => {
+            chrome.tabs.get(tabId, tab => {
+                if (chrome.runtime.lastError) {
+                    reject(chrome.runtime.lastError);
+                    return;
+                }
+
+                resolve(tab);
+            });
+        });
     }
 
     async function notifyTab(tabId, message) {
         try {
             await chrome.tabs.sendMessage(tabId, message);
             return true;
-        } catch (error) {
+        } catch {
             return false;
         }
     }
@@ -43,18 +51,20 @@
         });
     }
 
-    async function failAutomation(state, message) {
-        await setStatus(state, "failed");
-        await notifyTab(state.tabId, {
+    async function showToast(tabId, text) {
+        await notifyTab(tabId, {
             cmd: "automationToast",
-            text: `Automation failed: ${message}`
+            text
         });
     }
 
-    async function ensureContentScript(tabId) {
-        const available = await notifyTab(tabId, { cmd: "automationPing" });
+    async function failAutomation(state, message) {
+        await setStatus(state, "failed");
+        await showToast(state.tabId, `Automation failed: ${message}`);
+    }
 
-        if (available) {
+    async function ensureContentScript(tabId) {
+        if (await notifyTab(tabId, { cmd: "automationPing" })) {
             return true;
         }
 
@@ -63,11 +73,11 @@
                 target: { tabId },
                 files: ["automation/AutomationEngine.js", "content.js"]
             });
-
-            return await notifyTab(tabId, { cmd: "automationPing" });
-        } catch (error) {
+        } catch {
             return false;
         }
+
+        return notifyTab(tabId, { cmd: "automationPing" });
     }
 
     async function runCycle(state) {
@@ -78,37 +88,39 @@
             return;
         }
 
-        state.status = "submitting";
-        state.runId = crypto.randomUUID();
-        await setSession(state);
+        const runningState = {
+            ...state,
+            active: true,
+            status: "running",
+            reloadObserved: false,
+            runId: crypto.randomUUID()
+        };
 
-        const sent = await notifyTab(state.tabId, {
+        await setSession(runningState);
+
+        const sent = await notifyTab(runningState.tabId, {
             cmd: "automationRun",
-            runId: state.runId,
-            fixed: state.fixed,
-            number: state.number,
-            selectors: state.selectors
+            runId: runningState.runId,
+            fixed: runningState.fixed,
+            number: runningState.number,
+            selectors: runningState.selectors
         });
 
         if (!sent) {
-            await failAutomation(state, "Could not reach page content script");
+            await failAutomation(
+                runningState,
+                "Could not reach page content script"
+            );
         }
     }
+
     async function startAutomation(tabId) {
         const existing = await getSession();
 
         if (existing.active) {
-            await notifyTab(tabId, {
-                cmd: "automationToast",
-                text: "Automation already running"
-            });
+            await showToast(tabId, "Automation already running");
             return;
         }
-
-        await notifyTab(tabId, {
-            cmd: "automationToast",
-            text: "Starting automation..."
-        });
 
         const settings = await getStorage({
             fixed: "",
@@ -123,10 +135,7 @@
         const step = Number(settings.step);
 
         if (settings.fixed === "" || settings.fixed == null) {
-            await notifyTab(tabId, {
-                cmd: "automationToast",
-                text: "Automation failed: Fixed value not configured"
-            });
+            await showToast(tabId, "Automation failed: Fixed value not configured");
             return;
         }
 
@@ -137,25 +146,26 @@
             step <= 0 ||
             start > end
         ) {
-            await notifyTab(tabId, {
-                cmd: "automationToast",
-                text: "Automation failed: Invalid Start, End, or Step"
-            });
+            await showToast(tabId, "Automation failed: Invalid Start, End, or Step");
             return;
         }
 
         if (!selectors.fixed || !selectors.number || !selectors.submit) {
-            await notifyTab(tabId, {
-                cmd: "automationToast",
-                text: "Automation failed: Selectors not saved"
-            });
+            await showToast(tabId, "Automation failed: Selectors not saved");
             return;
         }
 
-        const tab = await getTab(tabId);
+        let tab;
+
+        try {
+            tab = await getTab(tabId);
+        } catch {
+            return;
+        }
+
         const state = {
             active: true,
-            status: "running",
+            status: "starting",
             tabId,
             originUrl: tab.url,
             fixed: String(settings.fixed),
@@ -163,35 +173,33 @@
             end,
             step,
             selectors,
-            runId: null
+            runId: null,
+            reloadObserved: false
         };
 
+        await showToast(tabId, "Starting automation...");
         await runCycle(state);
     }
 
-    async function advanceAfterSubmission(state) {
+    async function prepareNextCycle(state) {
         const nextNumber = state.number + state.step;
 
         if (nextNumber > state.end) {
             await setStatus(state, "completed");
-            await notifyTab(state.tabId, {
-                cmd: "automationToast",
-                text: "Automation completed"
-            });
-            return false;
+            await showToast(state.tabId, "Automation completed");
+            return;
         }
 
-        state.number = nextNumber;
-        state.status = "waitingForReload";
-        await setSession(state);
-        await notifyTab(state.tabId, {
-            cmd: "automationToast",
-            text: `Waiting for page reload before number ${state.number}`
+        await setSession({
+            ...state,
+            active: true,
+            status: "waitingForReload",
+            number: nextNumber,
+            reloadObserved: false
         });
-        return true;
     }
 
-    async function stopAutomation(tabId, message = "Automation stopped") {
+    async function stopAutomation(tabId, text = "Automation stopped") {
         const state = await getSession();
         const targetTabId = tabId || state.tabId;
 
@@ -205,30 +213,69 @@
         await setStatus(state, "stopped");
 
         if (targetTabId) {
-            await notifyTab(targetTabId, {
-                cmd: "automationToast",
-                text: message
-            });
+            await showToast(targetTabId, text);
         }
     }
 
+    async function handleNavigation(tabId, changeInfo, tab) {
+        const state = await getSession();
+
+        if (
+            !state.active ||
+            state.tabId !== tabId ||
+            state.status !== "waitingForReload"
+        ) {
+            return;
+        }
+
+        if (changeInfo.status === "loading") {
+            await setSession({
+                ...state,
+                reloadObserved: true
+            });
+            return;
+        }
+
+        if (changeInfo.status !== "complete" || !state.reloadObserved) {
+            return;
+        }
+
+        if (tab.url !== state.originUrl) {
+            await stopAutomation(
+                tabId,
+                `Automation stopped at number ${state.number}: page changed`
+            );
+            return;
+        }
+
+        const nextState = {
+            ...state,
+            status: "startingNextCycle"
+        };
+        await setSession(nextState);
+
+        setTimeout(() => {
+            runCycle(nextState);
+        }, 250);
+    }
+
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (!message || !message.cmd) {
+        if (!message?.cmd) {
             return;
         }
 
         switch (message.cmd) {
             case "picker":
-                chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-                    if (tabs.length) {
-                        chrome.tabs.sendMessage(tabs[0].id, message);
+                chrome.tabs.query({ active: true, currentWindow: true }, async tabs => {
+                    if (tabs[0]) {
+                        await notifyTab(tabs[0].id, message);
                     }
                 });
                 break;
 
             case "startAutomation":
                 chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-                    if (tabs.length) {
+                    if (tabs[0]) {
                         startAutomation(tabs[0].id);
                     }
                 });
@@ -236,7 +283,7 @@
 
             case "stopAutomation":
                 chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-                    stopAutomation(tabs.length ? tabs[0].id : null);
+                    stopAutomation(tabs[0]?.id || null);
                 });
                 break;
 
@@ -244,26 +291,22 @@
                 getSession().then(async state => {
                     if (
                         state.active &&
-                        state.status === "submitting" &&
+                        state.status === "running" &&
                         state.runId === message.runId &&
                         state.tabId === sender.tab?.id
                     ) {
-                        await advanceAfterSubmission(state);
+                        await prepareNextCycle(state);
                     }
 
                     sendResponse();
                 });
                 return true;
 
-            case "automationPageReady":
-                continueAfterReload(sender.tab?.id, sender.tab?.url);
-                break;
-
             case "automationCycleFailed":
                 getSession().then(async state => {
                     if (
                         state.active &&
-                        state.status === "submitting" &&
+                        state.status === "running" &&
                         state.runId === message.runId &&
                         state.tabId === sender.tab?.id
                     ) {
@@ -278,41 +321,6 @@
     });
 
     chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-        if (changeInfo.status === "complete") {
-            setTimeout(() => continueAfterReload(tabId, tab.url), 500);
-        }
+        handleNavigation(tabId, changeInfo, tab);
     });
-
-    async function continueAfterReload(tabId, url) {
-        if (!tabId || continuingTabIds.has(tabId)) {
-            return;
-        }
-
-        continuingTabIds.add(tabId);
-
-        try {
-            const state = await getSession();
-
-        if (
-            !state.active ||
-            state.status !== "waitingForReload" ||
-            state.tabId !== tabId
-        ) {
-            return;
-        }
-
-        if (url !== state.originUrl) {
-            await stopAutomation(
-                tabId,
-                `Automation stopped at number ${state.number}: page changed`
-            );
-            return;
-        }
-
-            await runCycle(state);
-        } finally {
-            continuingTabIds.delete(tabId);
-        }
-    }
-
 })();
